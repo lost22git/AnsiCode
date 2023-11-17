@@ -36,5 +36,5 @@ $e.ToRawString()
 "$e"
 ```
 
-![Add-AnsiStyle](https://github.com/lost22git/AnsiCode/assets/65008815/74d52a59-e65d-4483-874a-9f7a4b625e63)
+![Add-AnsiStyle](https://github.com/lost22git/AnsiCode/assets/65008815/72e0cafa-eea3-40e7-b5d7-7dcbc4afcebf)
 
