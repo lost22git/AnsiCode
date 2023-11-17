@@ -1,4 +1,4 @@
-# ------ reference ---------------------
+# ------ Reference ---------------------
 #
 # https://en.wikipedia.org/wiki/ANSI_escape_code
 #
@@ -10,7 +10,7 @@
 
 function Show-AnsiCode
 {
-  foreach ($i in @("",3,4,9,10))
+  foreach ($i in @("",2,3,4,5,9,10))
   {
     foreach($j in (0..9))
     {
@@ -18,6 +18,15 @@ function Show-AnsiCode
       {
         continue
       }
+      if($i -eq 2 -and $j -ne 1)
+      {
+        continue
+      }
+      if($i -eq 5 -and $j -ne 3)
+      {
+        continue
+      }
+
       $style = "`e[${i}${j}m"
       $text = "$i$j".PadLeft(3," ")
       Write-Host "$style {$text} `e[m" -NoNewline
@@ -208,7 +217,7 @@ enum AnsiStyle
   invert = 7                # 反色
   hide = 8                  # 隐藏
   strike = 9                # 删除线
-  doubleUnderline = 21      # 双下划线
+  underlineDouble = 21      # 双下划线
   notBold = 22              # 非粗体
   notItalic = 23            # 非斜体
   notUnderline = 24         # 非下划线
@@ -257,6 +266,160 @@ enum AnsiStyle
   bgWhiteBright = 107
 }
 
+
+class AnsiText
+{
+  [string]$Text
+
+  [System.Collections.ArrayList]$Style
+
+  AnsiText($Text)
+  { 
+    $this.Text = $Text
+    $this.Style = [System.Collections.ArrayList]::new()
+  }
+
+  [AnsiText] AddStyle([AnsiStyle[]]$Style)
+  {
+    if($null -ne $Style -and $Style.Count -gt 0)
+    {
+      foreach($s in $Style)
+      {
+        if($null -ne $s)
+        {
+          $$=$this.Style.Add($s)
+        }
+      }
+    }
+    return $this
+  }
+
+  [string] ToString()
+  {
+    $_text =  $this.Text
+    if($this.Style.Count -gt 0)
+    {
+      $_code = $this.Style | ForEach-Object { [int]$_ } 
+    | Join-String -Separator ";" -OutputPrefix "`e[" -OutputSuffix "m"
+      return "${_code}${_text}`e[0m"
+    } else
+    {
+      return "$_text"
+    }
+  }
+
+  [string] ToRawString()
+  {
+    $_text =  $this.Text
+    if($this.Style.Count -gt 0)
+    {
+      $_code = $this.Style | ForEach-Object { [int]$_ } 
+    | Join-String -Separator ";" -OutputPrefix "``e[" -OutputSuffix "m"
+      return "${_code}${_text}``e[0m"
+    } else
+    {
+      return "$_text"
+    }
+  }
+}
+
+class AnsiTextList
+{
+  [System.Collections.ArrayList]$List
+
+  AnsiTextList()
+  {
+    $this.List = [System.Collections.ArrayList]::new()
+  }
+
+  [AnsiTextList] AddText([string]$Text)
+  {
+    if($null -ne $Text)
+    {
+      $arr = $Text.Split("`e[") 
+      $p = [regex]::new("^([0-9;]*?)m([\s\S]+)") # SGR 序列正则
+      $c = 0
+      $last = $null
+      foreach ($i in $arr)
+      {
+        $c += 1
+        # 第一个一定是普通文本或者空串
+        if($c -eq 1)
+        {
+          if($i.Length -gt 0)
+          {
+            $last = [AnsiText]::new("$i")
+            $this.List.Add($last)
+          }
+          continue
+        }
+        
+        $m = $p.Match("$i")
+
+        # SGR 序列
+        if($m.Success)
+        {
+          $style = $m.Groups[1].Value.Split(";", [System.StringSplitOptions]::RemoveEmptyEntries)
+          | ForEach-Object { ([AnsiStyle]$_) }
+          $style = @() + $style
+          $text = $m.Groups[2].Value
+          
+          $last = [AnsiText]::new("$text").AddStyle($style)
+          $$ = $this.List.Add($last)
+        }
+        # 
+        else
+        {
+          $last.Text += "`e[$i"
+        }
+      }
+    }
+    return $this
+  }
+
+  [AnsiTextList] AddText([AnsiText]$Text)
+  {
+    if($null -ne $Text)
+    {
+      $$=$this.List.Add($Text)
+    }
+    return $this
+  }
+
+  [AnsiTextList] AddText([AnsiTextList] $Text)
+  {
+    if($null -ne $Text)
+    {
+      $this.List.AddRange($Text.List)
+    }
+    return $this
+  }
+
+  [AnsiTextList] AddStyle([AnsiStyle[]]$Style)
+  {
+    foreach ($i in $this.List)
+    {
+      $$=$i.AddStyle($Style)
+    }
+    return $this
+  }
+
+  [string] ToString()
+  {
+    return $this.List 
+    | ForEach-Object {"$_"}
+    | Join-String -Separator ""
+  }
+
+  [string] ToRawString()
+  {
+    return $this.List
+    | ForEach-Object { $_.ToRawString() }
+    | Join-String -Separator ""
+  }
+}
+
+
 <#
   .SYNOPSIS
   为文本添加 ansi style
@@ -272,19 +435,30 @@ enum AnsiStyle
 #>
 function Add-AnsiStyle
 {
-  [OutputType([string])]
+  [OutputType([AnsiTextList])]
   param(
     # 文本，可来自 pipeline
     [Parameter(Mandatory,ValueFromPipeline)]
-    [string]$Text,
+    [psobject]$Text,
    
     # 文本 ansi style
     [Parameter(Mandatory)]
     [AnsiStyle[]]$Style
   )
 
-  $_style = $Style | Select-Object -Unique | ForEach-Object { [int]$_ } 
-  | Join-String -Separator ";" -OutputPrefix "`e[" -OutputSuffix "m"
-
-  "${_style}${Text}`e[0m"
+  if($Text -is [string])
+  {
+    return [AnsiTextList]::new().AddText($Text).AddStyle($Style)
+  } elseif($Text -is [AnsiText])
+  {
+    return [AnsiTextList]::new().AddText(
+      ([AnsiText]$Text).AddStyle($Style)
+    )
+  } elseif($Text -is [AnsiTextList])
+  {
+    return ([AnsiTextList]$Text).AddStyle($Style)
+  } else
+  {
+    throw "ArgumentTypeError: Text($Text) is not a type in (string or AnsiText or AnsiTextList)"
+  }
 }
